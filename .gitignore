@@ -1,0 +1,6 @@
+# Ignore everything except required files
+
+*
+!.gitignore
+!regenerate.py
+!readme.md
