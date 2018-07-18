@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import os
 import time
@@ -89,25 +91,46 @@ _CONSTANT_NAMES = {
 def to_swift_string(s):
     return _CONSTANT_NAMES.get(s, None) or '"{}"'.format(s)
 
-def make_swift_dict(d, callback, *, prior=''):
-    callback('[\n')
-    prior += '    '
+def get_name(prefix, s, cache):
+    name = cache.get(s, None)
+    if name is None:
+        cache[s] = name = '__AUTOGEN_' + prefix + '_' + str(len(cache))
+    return name
+
+def make_swift_dict(name, d, callback, *, _cache=None, __prefix=None):
+    if _cache is None:
+        _cache = {}
+    if __prefix is None:
+        __prefix = name
+    for k, v in d.items():
+        if isinstance(v, dict) and v != {'!': True}:
+            make_swift_dict(get_name(__prefix, name + k, _cache), v, callback, _cache=_cache, __prefix=__prefix)
+    callback('fileprivate let ' + name + ' = Rule.subrule([')
     first = True
     for k, v in d.items():
+        if isinstance(v, dict):
+            if v == {'!': True}:
+                sub_name = '_accept_this_dict'
+            else:
+                sub_name = get_name(__prefix, name + k, _cache)
+        elif v is True:
+            sub_name = 'Rule.accept_this'
+        else:
+            raise RuntimeError
         if first:
             first = False
+            callback('\n    ')
         else:
-            callback(',\n')
-        callback(prior + to_swift_string(k) + ': ')
-        if isinstance(v, dict):
-            callback('Rule.subrule(')
-            make_swift_dict(v, callback, prior=prior)
-            callback(')')
-        elif v is True:
-            callback('Rule.accept_this')
-        else:
-            raise TypeError('Unexpected value: ' + repr(value))
-    callback('\n' + prior[:-4] + ']')
+            callback(',\n    ')
+        callback(to_swift_string(k) + ': ' + sub_name)
+    callback('\n])\n')
+
+
+def filter_top_rules(d):
+    # If only a single label top level
+    # domain is accepted, remove it as
+    # it is covered by the implicit `*` rule.
+    return {k: v for k, v in d.items() if v != {'!': True}}
 
 def main(argv=None):
     if argv is None:
@@ -164,6 +187,9 @@ fileprivate enum Rule {
 fileprivate let accept_this = "!"
 fileprivate let wildcard = "*"
 
+fileprivate let _accept_this_dict = Rule.subrule([
+    accept_this: Rule.accept_this
+])
 
 // This section is compiled from the public suffix list.
 // TEMPLATE SECTION
@@ -172,11 +198,13 @@ fileprivate let wildcard = "*"
 
             )
 
-        f.write('fileprivate let p_suffixes = Rule.subrule(')
-        make_swift_dict(rules_to_tree(positive_public_suffixes), f.write)
-        f.write(')\n\nfileprivate let n_suffixes = Rule.subrule(')
-        make_swift_dict(rules_to_tree(negative_public_suffixes), f.write)
-        f.write(')\n\n')
+        # f.write('fileprivate let p_suffixes = Rule.subrule(')
+        make_swift_dict('p_suffixes', filter_top_rules(rules_to_tree(positive_public_suffixes)), f.write)
+        # f.write(')\n\nfileprivate let n_suffixes = Rule.subrule(')
+        f.write('\n\n')
+        make_swift_dict('n_suffixes', filter_top_rules(rules_to_tree(negative_public_suffixes)), f.write)
+        # f.write(')\n\n')
+        f.write('\n\n')
 
         f.write(
 '''
